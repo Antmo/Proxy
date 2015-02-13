@@ -42,6 +42,12 @@ class NinnyServer
 
 int NinnyServer::run()
 {
+	char * buffer[200];
+	ssize_t ret;
+
+	ret = recv(servsocket, buffer, sizeof buffer, 0);
+
+	printf("%s\n",buffer);
 	return 0;
 }
 
