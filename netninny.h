@@ -31,13 +31,18 @@ class NinnyClient
 class NinnyServer 
 {
  public:
-  NinnyServer(int sockfd);
+  NinnyServer(int sockfd) :
+	  servsocket(sockfd) {};
+
+  int run();
+
  private:
+  int servsocket;
 };
 
-NinnyServer::NinnyServer(int sockfd)
+int NinnyServer::run()
 {
-
+	return 0;
 }
 
 static void
@@ -151,6 +156,9 @@ NinnyClient::run()
 
 	    // Initiate NinnyServer class as a proxy with new_fd as param
 	    NinnyServer proxy(new_fd);
+		proxy.run();
+
+		exit(1);
 	  }
 	close(new_fd);
       }
