@@ -14,24 +14,31 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <string>
+#include <iostream>
 
 using namespace std;
 
-class NetNinny 
+class NinnyClient 
 {
  public:
-  NetNinny(const char* port) { mPort.assign(port); }
+  NinnyClient(const char* port) { mPort.assign(port); }
   int run();
  private:
   string mPort;
   const int BACKLOG = 10;
 };
 
-class NetNinnyProxy 
+class NinnyServer 
 {
  public:
+  NinnyServer(int sockfd);
  private:
 };
+
+NinnyServer::NinnyServer(int sockfd)
+{
+
+}
 
 static void
 sigchld_handler(int s)
@@ -51,7 +58,7 @@ get_in_addr(struct sockaddr *sa)
 }
 
 int 
-NetNinny::run() 
+NinnyClient::run() 
 {
   int sockfd, new_fd;
   struct addrinfo hints, *servinfo, *p;
@@ -142,7 +149,8 @@ NetNinny::run()
 	  {
 	    close(sockfd);
 
-	    // Initiate proxy class with new_fd as param
+	    // Initiate NinnyServer class as a proxy with new_fd as param
+	    NinnyServer proxy(new_fd);
 	  }
 	close(new_fd);
       }

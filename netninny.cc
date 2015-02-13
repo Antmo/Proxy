@@ -6,19 +6,7 @@
  *  A proxy implemented in C++
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <errno.h>
-#include <string.h>
-#include <netdb.h>
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-
-#define BACKLOG 10  // Pending requests
-#define CLNT_PRT 80 // Port 80 = HTTP
+#include "netninny.h"
 
 using namespace std;
 
@@ -30,6 +18,10 @@ int main(int argc, char* argv[])
       cerr << "usage: ./netninny PORTNUMBER";
       return 1;
     }
-
+  else
+    {
+      NinnyClient ninny(argv[1]);
+      return ninny.run();
+    }
   return 0;
 }
