@@ -16,6 +16,9 @@
 #include <string>
 #include <iostream>
 
+
+#define BLOCK_SIZE 512
+
 using namespace std;
 
 class NinnyClient 
@@ -32,22 +35,33 @@ class NinnyServer
 {
  public:
   NinnyServer(int sockfd) :
-	  servsocket(sockfd) {};
+	  client_socket(sockfd), serv_socket(-1) {};
 
   int run();
 
  private:
-  int servsocket;
+  int client_socket; //web browser socket
+  int serv_socket;	//web host socket
 };
 
 int NinnyServer::run()
 {
-	char * buffer[200];
+	char buffer[512];
 	ssize_t ret;
+	
+	//intercept the HTTP request from the browser to the web server
+	//read it
+	ret = recv(client_socket, buffer, sizeof buffer, 0);
+	//extract the host address
+	//open a socket to the host address
+	char * HOST = strtok(buffer,"\r\n");
 
-	ret = recv(servsocket, buffer, sizeof buffer, 0);
-
-	printf("%s\n",buffer);
+	
+	for ( int i = 0; i < sizeof HOST; ++i)
+	{
+		printf("%s\n",HOST);
+		HOST = strtok(NULL,"\r\n");
+	}
 	return 0;
 }
 
