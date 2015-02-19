@@ -15,6 +15,7 @@
 #include <signal.h>
 #include <string>
 #include <iostream>
+#include <sstream>
 
 
 #define BLOCK_SIZE 512
@@ -55,17 +56,38 @@ int NinnyServer::run()
 	//extract the host address
 	//open a socket to the host address
 	
+	string buff{buffer, ret};
+	size_t found = buff.find("\r\n");
+
+	string REQUEST_LINE;
+	string METHOD;
+	string ABS_URL;
+	string VERSION;
+
+	if(found != string::npos) {
+	  string tmp{buff, 0, found};
+	  REQUEST_LINE = tmp;
+	}
+
+	stringstream ss{REQUEST_LINE};
+	while(ss >> METHOD >> ABS_URL >> VERSION)
+
+	  cout << METHOD << "\n"
+	       << ABS_URL << "\n"
+	       << VERSION << "\n";
 
 	//get the request line
-	char * REQUEST_LINE = strtok(buffer,"\r\n");
+	//	char * REQUEST_LINE = strtok(buffer,"\r\n");
 	//buffer is fucked up now I dont know how this function operates
 
 	//get the fields from the REQUEST_LINE
+	/*
 	char * METHOD	= strtok(REQUEST_LINE," ");
 	char * ABS_URI	= strtok(NULL," ");
 	char * VERSION	= strtok(NULL," ");
-	
-	printf("%s\n%s\n%s\n",METHOD,ABS_URI,VERSION);
+	*/
+
+	//	printf("%s\n%s\n%s\n",METHOD,ABS_URI,VERSION);
 
 	return 0;
 }
@@ -181,9 +203,9 @@ NinnyClient::run()
 
 	    // Initiate NinnyServer class as a proxy with new_fd as param
 	    NinnyServer proxy(new_fd);
-		proxy.run();
+	    proxy.run();
 
-		exit(1);
+	    exit(1);
 	  }
 	close(new_fd);
       }
