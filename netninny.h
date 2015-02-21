@@ -54,14 +54,19 @@ int NinnyServer::run()
 	ret = recv(client_socket, buffer, sizeof buffer, 0);
 	//extract the host address
 	//open a socket to the host address
-	char * HOST = strtok(buffer,"\r\n");
-
 	
-	for ( int i = 0; i < sizeof HOST; ++i)
-	{
-		printf("%s\n",HOST);
-		HOST = strtok(NULL,"\r\n");
-	}
+
+	//get the request line
+	char * REQUEST_LINE = strtok(buffer,"\r\n");
+	//buffer is fucked up now I dont know how this function operates
+
+	//get the fields from the REQUEST_LINE
+	char * METHOD	= strtok(REQUEST_LINE," ");
+	char * ABS_URI	= strtok(NULL," ");
+	char * VERSION	= strtok(NULL," ");
+	
+	printf("%s\n%s\n%s\n",METHOD,ABS_URI,VERSION);
+
 	return 0;
 }
 
