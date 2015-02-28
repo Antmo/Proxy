@@ -43,51 +43,115 @@ class NinnyServer
  private:
   int client_socket; //web browser socket
   int serv_socket;	//web host socket
+
+  int read_request();
+  int sock_connect();
+  int sock_send(int, const char *);
+
+	//request in whole
+  string REQUEST;
+	//the host server
+  string HOST;
+	//the response
+	string SERV_RESPONSE;
+
 };
+
+int NinnyServer::read_request()
+{
+	
+	char buffer[512];
+	ssize_t ret;
+
+	ret = recv(client_socket, buffer, sizeof buffer, 0);
+
+	//check what value ret has
+	
+	REQUEST = string(buffer,ret);
+	stringstream ss {REQUEST};
+
+	//get the HOST
+	while (HOST != "Host:")
+		ss >> HOST;
+	ss >> HOST;
+
+	return 0;
+}
+
+int NinnyServer::sock_send(int sockfd, const char * msg)
+{
+	size_t len = strlen(msg);
+
+	if ( len != send(sockfd,msg,len,0) )
+	{ 
+		cerr << "Error: send\n";
+		return 1;
+	}
+
+	return 0;
+}
+
+int NinnyServer::sock_connect()
+{
+	struct addrinfo hints, *servinfo, *p;
+	int rv;
+
+	char s[INET6_ADDRSTRLEN];
+
+	memset(&hints, 0, sizeof hints);
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+
+	if( (rv = getaddrinfo(HOST.c_str(), "80", &hints, &servinfo)) != 0)
+	{
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+		return false;
+	}
+
+	serv_socket = socket(servinfo->ai_family,servinfo->ai_socktype,servinfo->ai_protocol);
+
+	connect(serv_socket,servinfo->ai_addr, servinfo->ai_addrlen);
+
+	return 0;
+}
 
 int NinnyServer::run()
 {
-	char buffer[512];
-	ssize_t ret;
 	
-	//intercept the HTTP request from the browser to the web server
-	//read it
-	ret = recv(client_socket, buffer, sizeof buffer, 0);
-	//extract the host address
-	//open a socket to the host address
-	
-	string buff{buffer, ret};
-	size_t found = buff.find("\r\n");
-
-	string REQUEST_LINE;
-	string METHOD;
-	string ABS_URL;
-	string VERSION;
-
-	if(found != string::npos) {
-	  string tmp{buff, 0, found};
-	  REQUEST_LINE = tmp;
+	if ( read_request() != 0 )
+	{
+		cerr << "Failed to read request\n";
+		return 1;
 	}
 
-	stringstream ss{REQUEST_LINE};
-	while(ss >> METHOD >> ABS_URL >> VERSION)
+	if ( sock_connect() != 0 )
+	{
+		cerr << "Failed to connect to server\n";
+		return 1;
+	}
 
-	  cout << METHOD << "\n"
-	       << ABS_URL << "\n"
-	       << VERSION << "\n";
+	//send to web server
+	if ( sock_send(serv_socket, REQUEST.c_str()) != 0 )
+	{
+		cerr << "Failed to send data\n";
+		return 1;
+	}
 
-	//get the request line
-	//	char * REQUEST_LINE = strtok(buffer,"\r\n");
-	//buffer is fucked up now I dont know how this function operates
+	//recv to respons i think... 
+	
+	int ret;
+	char buffer[512];
 
-	//get the fields from the REQUEST_LINE
-	/*
-	char * METHOD	= strtok(REQUEST_LINE," ");
-	char * ABS_URI	= strtok(NULL," ");
-	char * VERSION	= strtok(NULL," ");
-	*/
+	ret = recv(serv_socket, buffer, sizeof buffer, 0);
 
-	//	printf("%s\n%s\n%s\n",METHOD,ABS_URI,VERSION);
+	SERV_RESPONSE = string(buffer, ret);
+
+	//send back to web browser
+	if ( sock_send(client_socket, SERV_RESPONSE.c_str()) != 0 )
+	{
+		cerr << "Failed to send data\n";
+		return 1;
+	}
 
 	return 0;
 }
