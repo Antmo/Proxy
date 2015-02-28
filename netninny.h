@@ -59,7 +59,7 @@ class NinnyServer
 	//the response
 	string SERV_RESPONSE;
 
-	queue<const char *> BUFFER;
+	queue<string> BUFFER;
 
 };
 
@@ -69,17 +69,25 @@ int NinnyServer::read_request()
 	char buffer[512];
 	ssize_t ret;
 
-	ret = recv(client_socket, buffer, sizeof buffer, 0);
+	HOST = "";
 
-	//check what value ret has
-	
-	REQUEST = string(buffer,ret);
-	stringstream ss {REQUEST};
+	while( (ret = recv(client_socket, buffer, sizeof buffer, 0)) > 0)
+	{	
+		REQUEST = string{buffer};
+		if ( HOST.empty() )
+		{
+			stringstream ss {REQUEST};
+			while (HOST != "Host:")
+				ss >> HOST;
+			ss >> HOST;
+		}
 
-	//get the HOST
-	while (HOST != "Host:")
-		ss >> HOST;
-	ss >> HOST;
+		BUFFER.push(REQUEST);
+		//find end of http
+		if ( buffer[ret -4] == '\r' && buffer[ret -3] == '\n'
+					&& buffer[ret -2] == '\r' && buffer[ret-1] == '\n')
+			break;
+	}
 
 	return 0;
 }
@@ -158,30 +166,12 @@ int NinnyServer::run()
 		return 1;
 	}
 
-	//send to web server
-	// REBUILD THE GET REQUEST ?
-	/*
-	stringstream ss {REQUEST};
-	string str;
-	getline(ss,str);
-
-	while ( getline(ss,str) )
+	while ( ! BUFFER.empty() )
 	{
-		REQUEST += str + "\r\n";
+		sock_send(serv_socket,BUFFER.front().c_str());
+		BUFFER.pop();
 	}
-	*/
-	//had to add this otherwise recv would'nt stop blocking
-	//still blocks though but not everything..
-	REQUEST += "\r\n\r\n";
 
-	if ( sock_send(serv_socket, REQUEST.c_str()) != 0 )
-	{
-		cerr << "Failed to send data\n";
-		return 1;
-	}
-	
-	//recv to respons i think... 
-	
 	int ret;
 	char buffer[512];
 	while (true)
@@ -189,13 +179,10 @@ int NinnyServer::run()
 
 	while ( (ret = recv(serv_socket, buffer, sizeof buffer, 0) ) > 0 )
 	{
-
-		SERV_RESPONSE = string(buffer, ret);
-		BUFFER.push(SERV_RESPONSE.c_str());
-		cout << "buffer size: " << BUFFER.size() << '\n';
+		SERV_RESPONSE = string{buffer};
+		BUFFER.push(SERV_RESPONSE);
 	}
 
-	cout << "ret: " << ret << '\n';
 	if ( ret == -1 )
 	{
 		perror("recv:");
@@ -208,8 +195,7 @@ int NinnyServer::run()
 
 		while ( ! BUFFER.empty() )
 		{
-			cerr << BUFFER.size() << '\n';
-			sock_send(client_socket, BUFFER.front());
+			sock_send(client_socket, BUFFER.front().c_str());
 			BUFFER.pop();
 		}
 		break;
