@@ -181,6 +181,10 @@ int NinnyServer::run()
 	{
 		SERV_RESPONSE = string{buffer};
 		BUFFER.push(SERV_RESPONSE);
+		//find end of http
+		if ( buffer[ret -4] == '\r' && buffer[ret -3] == '\n'
+					&& buffer[ret -2] == '\r' && buffer[ret-1] == '\n')
+			break;
 	}
 
 	if ( ret == -1 )
