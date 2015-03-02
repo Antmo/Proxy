@@ -14,13 +14,17 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <string>
+
 #include <iostream>
 #include <sstream>
+#include <queue>
 
 
 #define BLOCK_SIZE 512
 
 using namespace std;
+
+static void * get_in_addr(struct sockaddr *);
 
 class NinnyClient 
 {
@@ -54,6 +58,8 @@ class NinnyServer
   string HOST;
 	//the response
 	string SERV_RESPONSE;
+
+	queue<const char *> BUFFER;
 
 };
 
@@ -105,12 +111,34 @@ int NinnyServer::sock_connect()
 	if( (rv = getaddrinfo(HOST.c_str(), "80", &hints, &servinfo)) != 0)
 	{
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-		return false;
+		return 1;
 	}
 
-	serv_socket = socket(servinfo->ai_family,servinfo->ai_socktype,servinfo->ai_protocol);
+	for (p = servinfo; p != NULL; p = p->ai_next)
+	{
+		if ( (serv_socket = socket(p->ai_family,p->ai_socktype,p->ai_protocol)) == -1 )
+		{
+			perror("socket:");
+			continue;
+		}
+		
+		if ( connect(serv_socket,p->ai_addr, p->ai_addrlen) == -1 )
+		{
+			perror("socket connect:");
+			close(serv_socket);
+			continue;
+		}
 
-	connect(serv_socket,servinfo->ai_addr, servinfo->ai_addrlen);
+		break;
+	}
+
+	if (!p)
+		return false;
+
+	inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr), s, sizeof s);
+	printf("connected to %s\n",s);
+	
+	freeaddrinfo(servinfo);
 
 	return 0;
 }
@@ -131,28 +159,63 @@ int NinnyServer::run()
 	}
 
 	//send to web server
+	// REBUILD THE GET REQUEST ?
+	/*
+	stringstream ss {REQUEST};
+	string str;
+	getline(ss,str);
+
+	while ( getline(ss,str) )
+	{
+		REQUEST += str + "\r\n";
+	}
+	*/
+	//had to add this otherwise recv would'nt stop blocking
+	//still blocks though but not everything..
+	REQUEST += "\r\n\r\n";
+
 	if ( sock_send(serv_socket, REQUEST.c_str()) != 0 )
 	{
 		cerr << "Failed to send data\n";
 		return 1;
 	}
-
+	
 	//recv to respons i think... 
 	
 	int ret;
 	char buffer[512];
-
-	ret = recv(serv_socket, buffer, sizeof buffer, 0);
-
-	SERV_RESPONSE = string(buffer, ret);
-
-	//send back to web browser
-	if ( sock_send(client_socket, SERV_RESPONSE.c_str()) != 0 )
+	while (true)
 	{
-		cerr << "Failed to send data\n";
-		return 1;
+
+	while ( (ret = recv(serv_socket, buffer, sizeof buffer, 0) ) > 0 )
+	{
+
+		SERV_RESPONSE = string(buffer, ret);
+		BUFFER.push(SERV_RESPONSE.c_str());
+		cout << "buffer size: " << BUFFER.size() << '\n';
 	}
 
+	cout << "ret: " << ret << '\n';
+	if ( ret == -1 )
+	{
+		perror("recv:");
+		return 1;
+	}
+	else
+	{
+		close(serv_socket);
+		serv_socket = -1;
+
+		while ( ! BUFFER.empty() )
+		{
+			cerr << BUFFER.size() << '\n';
+			sock_send(client_socket, BUFFER.front());
+			BUFFER.pop();
+		}
+		break;
+	}
+
+	}
 	return 0;
 }
 
