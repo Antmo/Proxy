@@ -19,12 +19,12 @@
 #include <sstream>
 #include <queue>
 
-
 #define BLOCK_SIZE 512
 
 using namespace std;
 
 static void * get_in_addr(struct sockaddr *);
+static void sigchld_handler(int);
 
 class NinnyClient 
 {
@@ -39,213 +39,223 @@ class NinnyClient
 class NinnyServer 
 {
  public:
-  NinnyServer(int sockfd) :
-	  client_socket(sockfd), serv_socket(-1) {};
+ NinnyServer(int sockfd) :
+  client_socket(sockfd), serv_socket(-1) {};
 
   int run();
 
  private:
-  int client_socket; //web browser socket
-  int serv_socket;	//web host socket
+  int client_socket;                    // Web browser socket
+  int serv_socket;	                // Web host socket
 
 	
-  int read_header(int);		//read HTTP headers
-	int stream_data();			//stream data from server to client
+  int read_header(int);	                // Read HTTP headers
+  int stream_data();			// Stream data from server to client
 
-  int sock_connect();		//connect a socket to server
-  int sock_send(int, const char *);	//send a msg to socket
+  int sock_connect();		        // Connect a socket to server
+  int sock_send(int, const char *);	// Send a msg to socket
 
-	//the host server
+  //the host server
   string HOST;
 
-	queue<string> BUFFER;
+  queue<string> BUFFER;
 
 };
+
+/* ========================================================= */
+/*                        NinnyServer                        */
+/* ========================================================= */
+
 
 /*
  * connects to a web server using HOST
  */
 int NinnyServer::sock_connect()
 {
-	struct addrinfo hints, *servinfo, *p;
-	int rv;
+  struct addrinfo hints, *servinfo, *p;
+  int rv;
 
-	char s[INET6_ADDRSTRLEN];
+  char s[INET6_ADDRSTRLEN];
 
-	memset(&hints, 0, sizeof hints);
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
+  memset(&hints, 0, sizeof hints);
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
 
-	if( (rv = getaddrinfo(HOST.c_str(), "80", &hints, &servinfo)) != 0)
+  if( (rv = getaddrinfo(HOST.c_str(), "80", &hints, &servinfo)) != 0)
+    {
+      fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+      return 1;
+    }
+
+  for (p = servinfo; p != NULL; p = p->ai_next)
+    {
+      if ( (serv_socket = socket(p->ai_family,p->ai_socktype,p->ai_protocol)) == -1 )
 	{
-		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-		return 1;
+	  perror("socket:");
+	  continue;
 	}
-
-	for (p = servinfo; p != NULL; p = p->ai_next)
-	{
-		if ( (serv_socket = socket(p->ai_family,p->ai_socktype,p->ai_protocol)) == -1 )
-		{
-			perror("socket:");
-			continue;
-		}
 		
-		if ( connect(serv_socket,p->ai_addr, p->ai_addrlen) == -1 )
-		{
-			perror("socket connect:");
-			close(serv_socket);
-			continue;
-		}
-
-		break;
+      if ( connect(serv_socket,p->ai_addr, p->ai_addrlen) == -1 )
+	{
+	  perror("socket connect:");
+	  close(serv_socket);
+	  continue;
 	}
 
-	if (!p)
-		return false;
+      break;
+    }
 
-	inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr), s, sizeof s);
-	printf("connected to %s\n",s);
+  if (!p)
+    return false;
+
+  inet_ntop(p->ai_family, get_in_addr((struct sockaddr *)p->ai_addr), s, sizeof s);
+  printf("connected to %s\n",s);
 	
-	freeaddrinfo(servinfo);
+  freeaddrinfo(servinfo);
 
-	return 0;
+  return 0;
 }
 
-/* reads header data and puts it into the buffer
+/*
+ * Reads header data and puts it into the buffer
  */
 int NinnyServer::read_header(int sockfd)
 {
 
-	ssize_t ret;
-	char buffer[BLOCK_SIZE];
-	string TEMP;
+  ssize_t ret;
+  char buffer[BLOCK_SIZE];
+  string TEMP;
 	
-	while (true)
+  while (true)
+    {
+
+      //read upto BLOCK_SIZE bytes from socket
+      ret = recv(sockfd, buffer, sizeof buffer, 0);
+
+      if (ret == -1)
 	{
-
-		//read upto BLOCK_SIZE bytes from socket
-		ret = recv(sockfd, buffer, sizeof buffer, 0);
-
-		if (ret == -1)
-		{
-			perror("recv:");
-			return 1;
-		}
+	  perror("recv:");
+	  return 1;
+	}
 		
-		TEMP = string{buffer};
-		BUFFER.push(TEMP);
+      TEMP = string{buffer};
+      BUFFER.push(TEMP);
 
-		//find HOST
-		stringstream ss {TEMP};
-		string tmp;
-		while ( ss >> tmp )
-		{
-			if (tmp == "Host:")
-			{
-				ss >> HOST;
-				break;
-			}
-		}
-
-		//find end of http OBS! this is not optimal and doesnt always work
-		if ( ret >= 4 )
-		{
-			for (int i = 0; i < ret; ++i)
-			{
-				if (buffer[i] == '\r' && buffer[i+1] == '\n')
-				{
-					i += 2;
-					if ( i >= ret )
-						return 0;
-					if ( buffer[i] == '\r' && buffer[i+1] == '\n')
-						return 0; //HTTP header end is in this block
-				}
-			}
-		}
+      //find HOST
+      stringstream ss {TEMP};
+      string tmp;
+      while ( ss >> tmp )
+	{
+	  if (tmp == "Host:")
+	    {
+	      ss >> HOST;
+	      break;
+	    }
 	}
 
-	return 0;
+      // find end of http OBS! this is not optimal and doesnt always work
+      if ( ret >= 4 )
+	{
+	  for (int i = 0; i < ret; ++i)
+	    {
+	      if (buffer[i] == '\r' && buffer[i+1] == '\n')
+		{
+		  i += 2;
+		  if ( i >= ret )
+		    return 0;
+		  if ( buffer[i] == '\r' && buffer[i+1] == '\n')
+		    return 0; //HTTP header end is in this block
+		}
+	    }
+	}
+    }
+
+  return 0;
 }
 
 int NinnyServer::stream_data()
 {
-	ssize_t ret;
-	char buffer[BLOCK_SIZE];
+  ssize_t ret;
+  char buffer[BLOCK_SIZE];
 
-	while (true)
+  while (true)
+    {
+      ret = recv(serv_socket,buffer,sizeof buffer,0);
+
+      if ( ret == -1 )
 	{
-		ret = recv(serv_socket,buffer,sizeof buffer,0);
-
-		if ( ret == -1 )
-		{
-			perror("recv");
-			return 1;
-		}
-		else if (ret == 0)
-		{
-			close(serv_socket);
-			serv_socket = -1;
-			return 0;
-		}
-		else
-			sock_send(client_socket,buffer);
+	  perror("recv");
+	  return 1;
 	}
+      else if (ret == 0)
+	{
+	  close(serv_socket);
+	  serv_socket = -1;
+	  return 0;
+	}
+      else
+	sock_send(client_socket,buffer);
+    }
 }
 
 int NinnyServer::sock_send(int sockfd, const char * msg)
 {
-	size_t len = strlen(msg);
+  size_t len = strlen(msg);
 
-	if ( len != send(sockfd,msg,len,0) )
-	{ 
-		cerr << "Error: send\n";
-		return 1;
-	}
+  if ( len != send(sockfd,msg,len,0) )
+    { 
+      cerr << "Error: send\n";
+      return 1;
+    }
 
-	return 0;
+  return 0;
 }
 
 
 int NinnyServer::run()
 {
 	
-	if ( read_header(client_socket) != 0 )
-	{
-		cerr << "Failed to read request header\n";
-		return 1;
-	}
+  if ( read_header(client_socket) != 0 )
+    {
+      cerr << "Failed to read request header\n";
+      return 1;
+    }
 
-	if ( sock_connect() != 0 )
-	{
-		cerr << "Failed to connect to server\n";
-		return 1;
-	}
+  if ( sock_connect() != 0 )
+    {
+      cerr << "Failed to connect to server\n";
+      return 1;
+    }
 
-	while ( ! BUFFER.empty() )
-	{
-		sock_send(serv_socket,BUFFER.front().c_str());
-		BUFFER.pop();
-	}
+  while ( ! BUFFER.empty() )
+    {
+      sock_send(serv_socket,BUFFER.front().c_str());
+      BUFFER.pop();
+    }
 
-	//read the response
+  //read the response
 	
-	if ( read_header(serv_socket) != 0)
-	{
-		cerr << "Failed to read response header\n";
-		return 1;
-	}
+  if ( read_header(serv_socket) != 0)
+    {
+      cerr << "Failed to read response header\n";
+      return 1;
+    }
 	
-	//send the response header back
-	while ( ! BUFFER.empty() )
-	{
-		sock_send(client_socket,BUFFER.front().c_str());
-		BUFFER.pop();
-	}
-	//continue to stream data
-	stream_data();
+  //send the response header back
+  while ( ! BUFFER.empty() )
+    {
+      sock_send(client_socket,BUFFER.front().c_str());
+      BUFFER.pop();
+    }
+  //continue to stream data
+  stream_data();
 
-	return 0;
+  return 0;
 }
+
+/* ========================================================= */
+/*                    Helper functions                       */
+/* ========================================================= */
 
 static void
 sigchld_handler(int s)
@@ -263,6 +273,10 @@ get_in_addr(struct sockaddr *sa)
 
   return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
+
+/* ========================================================= */
+/*                        NinnyClient                        */
+/* ========================================================= */
 
 int 
 NinnyClient::run() 
@@ -287,83 +301,83 @@ NinnyClient::run()
       return 1;
     }
 
-    for(p = servinfo; p != NULL; p = p->ai_next)
-      {
-	if((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) 
-	  {
-	    perror("server: socket");
-	    continue;
-	  }
-	if((setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
-			 sizeof(int)) == -1))
-	  {
-	    perror("setsockopt");
-	    exit(1);
-	  }
-	if(bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) 
-	  {
-	    close(sockfd);
-	    perror("server: bind");
-	    continue;
-	  }
+  for(p = servinfo; p != NULL; p = p->ai_next)
+    {
+      if((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) 
+	{
+	  perror("server: socket");
+	  continue;
+	}
+      if((setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes,
+		     sizeof(int)) == -1))
+	{
+	  perror("setsockopt");
+	  exit(1);
+	}
+      if(bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) 
+	{
+	  close(sockfd);
+	  perror("server: bind");
+	  continue;
+	}
 
-	break;
+      break;
 
-      }
+    }
 
-    if(p == NULL)
-      {
-	fprintf(stderr, "server: failed to bind\n");
-	return 2;
-      }
+  if(p == NULL)
+    {
+      fprintf(stderr, "server: failed to bind\n");
+      return 2;
+    }
 
-    freeaddrinfo(servinfo);
+  freeaddrinfo(servinfo);
 
-    if(listen(sockfd, BACKLOG) == -1)
-      {
-	perror("listen");
-	exit(1);
-      }
+  if(listen(sockfd, BACKLOG) == -1)
+    {
+      perror("listen");
+      exit(1);
+    }
 
-    sa.sa_handler = sigchld_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART;
+  sa.sa_handler = sigchld_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_RESTART;
 
-    if(sigaction(SIGCHLD, &sa, NULL) == -1)
-      {
-	perror("sigaction");
-	exit(1);
-      }
+  if(sigaction(SIGCHLD, &sa, NULL) == -1)
+    {
+      perror("sigaction");
+      exit(1);
+    }
 
-    printf("server: waiting for connections...\n");
+  printf("server: waiting for connections...\n");
 
-    while(1)
-      {
-	sin_size = sizeof their_addr;
-	new_fd = accept(sockfd, (struct sockaddr*)&their_addr, &sin_size);
+  while(1)
+    {
+      sin_size = sizeof their_addr;
+      new_fd = accept(sockfd, (struct sockaddr*)&their_addr, &sin_size);
 
-	if(new_fd == -1)
-	  {
-	    perror("accept");
-	    continue;
-	  }
+      if(new_fd == -1)
+	{
+	  perror("accept");
+	  continue;
+	}
 
-	inet_ntop(their_addr.ss_family, 
-		  get_in_addr((struct sockaddr *)&their_addr), s, sizeof s);
-	printf("server: got connection from %s\n", s);
+      inet_ntop(their_addr.ss_family, 
+		get_in_addr((struct sockaddr *)&their_addr), s, sizeof s);
+      printf("server: got connection from %s\n", s);
 
-	if(!fork())
-	  {
-	    close(sockfd);
+      if(!fork())
+	{
+	  close(sockfd);
 
-	    // Initiate NinnyServer class as a proxy with new_fd as param
-	    NinnyServer proxy(new_fd);
-	    proxy.run();
+	  // Initiate NinnyServer class as a proxy with new_fd as param
+	  NinnyServer proxy(new_fd);
+	  proxy.run();
 
-	    exit(1);
-	  }
-	close(new_fd);
-      }
+	  exit(1);
+	}
+      close(new_fd);
+    }
 }
     
     
