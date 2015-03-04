@@ -51,13 +51,12 @@ class NinnyServer
   int read_request();
   int sock_connect();
   int sock_send(int, const char *);
+	int readToBuffer(int);
 
 	//request in whole
   string REQUEST;
 	//the host server
   string HOST;
-	//the response
-	string SERV_RESPONSE;
 
 	queue<string> BUFFER;
 
@@ -71,24 +70,48 @@ int NinnyServer::read_request()
 
 	HOST = "";
 
-	while( (ret = recv(client_socket, buffer, sizeof buffer, 0)) > 0)
-	{	
-		REQUEST = string{buffer};
-		if ( HOST.empty() )
-		{
-			stringstream ss {REQUEST};
+	if ( readToBuffer(client_socket) == -1)
+	{
+		return 1;
+	}
+	else
+	{
+
+			stringstream ss {BUFFER.front()};
 			while (HOST != "Host:")
 				ss >> HOST;
 			ss >> HOST;
-		}
-
-		BUFFER.push(REQUEST);
-		//find end of http
-		if ( buffer[ret -4] == '\r' && buffer[ret -3] == '\n'
-					&& buffer[ret -2] == '\r' && buffer[ret-1] == '\n')
-			break;
 	}
 
+	return 0;
+}
+
+int NinnyServer::readToBuffer(int sockfd)
+{
+	
+	int ret;
+	char buffer[512];
+	string TEMP;
+	
+	while ( (ret = recv(sockfd, buffer, sizeof buffer, 0) ) > 0 )
+	{
+		TEMP = string{buffer};
+		BUFFER.push(TEMP);
+		
+		//find end of http OBS! this is not optimal and doesnt always work
+		if ( buffer[ret -4] == '\r' && buffer[ret -3] == '\n'
+					|| buffer[ret -2] == '\r' && buffer[ret-1] == '\n')
+			break;
+		cout << "hej\n";
+	}
+
+	if (ret == -1)
+	{
+		perror("recv:");
+		return 1;
+	}
+
+	cout << BUFFER.size()<<'\n';
 	return 0;
 }
 
@@ -172,26 +195,9 @@ int NinnyServer::run()
 		BUFFER.pop();
 	}
 
-	int ret;
-	char buffer[512];
-	while (true)
-	{
-
-	while ( (ret = recv(serv_socket, buffer, sizeof buffer, 0) ) > 0 )
-	{
-		SERV_RESPONSE = string{buffer};
-		BUFFER.push(SERV_RESPONSE);
-		//find end of http
-		if ( buffer[ret -4] == '\r' && buffer[ret -3] == '\n'
-					&& buffer[ret -2] == '\r' && buffer[ret-1] == '\n')
-			break;
-	}
-
-	if ( ret == -1 )
-	{
-		perror("recv:");
+	//read the response
+	if ( readToBuffer(serv_socket) == -1 )
 		return 1;
-	}
 	else
 	{
 		close(serv_socket);
@@ -202,10 +208,8 @@ int NinnyServer::run()
 			sock_send(client_socket, BUFFER.front().c_str());
 			BUFFER.pop();
 		}
-		break;
 	}
 
-	}
 	return 0;
 }
 
