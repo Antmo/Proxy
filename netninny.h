@@ -133,6 +133,16 @@ int NinnyServer::read_header(int sockfd)
 		}
 		
 		TEMP = string{buffer};
+
+		int pos = TEMP.find("Connection:");
+		int POS = TEMP.find("\r\n",pos);
+
+		if ( pos != string::npos )
+		{
+			cout << TEMP.substr(pos,POS)<<'\n';
+			TEMP.erase(pos,POS);
+		}
+
 		BUFFER.push(TEMP);
 
 		//find HOST
@@ -146,6 +156,7 @@ int NinnyServer::read_header(int sockfd)
 				break;
 			}
 		}
+
 
 		//find end of http OBS! this is not optimal and doesnt always work
 		if ( ret >= 4 )
