@@ -48,13 +48,13 @@ class NinnyServer
   int client_socket; //web browser socket
   int serv_socket;	//web host socket
 
-  int read_request();
-  int sock_connect();
-  int sock_send(int, const char *);
-	int readToBuffer(int);
+	
+  int read_header(int);		//read HTTP headers
+	int stream_data();			//stream data from server to client
 
-	//request in whole
-  string REQUEST;
+  int sock_connect();		//connect a socket to server
+  int sock_send(int, const char *);	//send a msg to socket
+
 	//the host server
   string HOST;
 
@@ -62,72 +62,9 @@ class NinnyServer
 
 };
 
-int NinnyServer::read_request()
-{
-	
-	char buffer[512];
-	ssize_t ret;
-
-	HOST = "";
-
-	if ( readToBuffer(client_socket) == -1)
-	{
-		return 1;
-	}
-	else
-	{
-
-			stringstream ss {BUFFER.front()};
-			while (HOST != "Host:")
-				ss >> HOST;
-			ss >> HOST;
-	}
-
-	return 0;
-}
-
-int NinnyServer::readToBuffer(int sockfd)
-{
-	
-	int ret;
-	char buffer[512];
-	string TEMP;
-	
-	while ( (ret = recv(sockfd, buffer, sizeof buffer, 0) ) > 0 )
-	{
-		TEMP = string{buffer};
-		BUFFER.push(TEMP);
-		
-		//find end of http OBS! this is not optimal and doesnt always work
-		if ( buffer[ret -4] == '\r' && buffer[ret -3] == '\n'
-					|| buffer[ret -2] == '\r' && buffer[ret-1] == '\n')
-			break;
-		cout << "hej\n";
-	}
-
-	if (ret == -1)
-	{
-		perror("recv:");
-		return 1;
-	}
-
-	cout << BUFFER.size()<<'\n';
-	return 0;
-}
-
-int NinnyServer::sock_send(int sockfd, const char * msg)
-{
-	size_t len = strlen(msg);
-
-	if ( len != send(sockfd,msg,len,0) )
-	{ 
-		cerr << "Error: send\n";
-		return 1;
-	}
-
-	return 0;
-}
-
+/*
+ * connects to a web server using HOST
+ */
 int NinnyServer::sock_connect()
 {
 	struct addrinfo hints, *servinfo, *p;
@@ -174,12 +111,107 @@ int NinnyServer::sock_connect()
 	return 0;
 }
 
+/* reads header data and puts it into the buffer
+ */
+int NinnyServer::read_header(int sockfd)
+{
+
+	ssize_t ret;
+	char buffer[BLOCK_SIZE];
+	string TEMP;
+	
+	while (true)
+	{
+
+		//read upto BLOCK_SIZE bytes from socket
+		ret = recv(sockfd, buffer, sizeof buffer, 0);
+
+		if (ret == -1)
+		{
+			perror("recv:");
+			return 1;
+		}
+		
+		TEMP = string{buffer};
+		BUFFER.push(TEMP);
+
+		//find HOST
+		stringstream ss {TEMP};
+		string tmp;
+		while ( ss >> tmp )
+		{
+			if (tmp == "Host:")
+			{
+				ss >> HOST;
+				break;
+			}
+		}
+
+		//find end of http OBS! this is not optimal and doesnt always work
+		if ( ret >= 4 )
+		{
+			for (int i = 0; i < ret; ++i)
+			{
+				if (buffer[i] == '\r' && buffer[i+1] == '\n')
+				{
+					i += 2;
+					if ( i >= ret )
+						return 0;
+					if ( buffer[i] == '\r' && buffer[i+1] == '\n')
+						return 0; //HTTP header end is in this block
+				}
+			}
+		}
+	}
+
+	return 0;
+}
+
+int NinnyServer::stream_data()
+{
+	ssize_t ret;
+	char buffer[BLOCK_SIZE];
+
+	while (true)
+	{
+		ret = recv(serv_socket,buffer,sizeof buffer,0);
+
+		if ( ret == -1 )
+		{
+			perror("recv");
+			return 1;
+		}
+		else if (ret == 0)
+		{
+			close(serv_socket);
+			serv_socket = -1;
+			return 0;
+		}
+		else
+			sock_send(client_socket,buffer);
+	}
+}
+
+int NinnyServer::sock_send(int sockfd, const char * msg)
+{
+	size_t len = strlen(msg);
+
+	if ( len != send(sockfd,msg,len,0) )
+	{ 
+		cerr << "Error: send\n";
+		return 1;
+	}
+
+	return 0;
+}
+
+
 int NinnyServer::run()
 {
 	
-	if ( read_request() != 0 )
+	if ( read_header(client_socket) != 0 )
 	{
-		cerr << "Failed to read request\n";
+		cerr << "Failed to read request header\n";
 		return 1;
 	}
 
@@ -196,19 +228,21 @@ int NinnyServer::run()
 	}
 
 	//read the response
-	if ( readToBuffer(serv_socket) == -1 )
-		return 1;
-	else
+	
+	if ( read_header(serv_socket) != 0)
 	{
-		close(serv_socket);
-		serv_socket = -1;
-
-		while ( ! BUFFER.empty() )
-		{
-			sock_send(client_socket, BUFFER.front().c_str());
-			BUFFER.pop();
-		}
+		cerr << "Failed to read response header\n";
+		return 1;
 	}
+	
+	//send the response header back
+	while ( ! BUFFER.empty() )
+	{
+		sock_send(client_socket,BUFFER.front().c_str());
+		BUFFER.pop();
+	}
+	//continue to stream data
+	stream_data();
 
 	return 0;
 }
