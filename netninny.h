@@ -18,10 +18,24 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <iterator>
+#include <algorithm>
 
 #define BLOCK_SIZE 512
 
 using namespace std;
+
+static const char* error1_redirect =
+    "HTTP/1.1 301 Moved Permanently\r\n"
+    "Location: http://www.ida.liu.se/~TDTS04/labs/2011/ass2/error1.html\r\n"
+    "Content-Length: 0\r\n"
+    "\r\n";
+
+static const char* error2_redirect =
+    "HTTP/1.1 301 Moved Permanently\r\n"
+    "Location: http://www.ida.liu.se/~TDTS04/labs/2011/ass2/error2.html\r\n"
+    "Content-Length: 0\r\n"
+    "\r\n";
 
 static void * get_in_addr(struct sockaddr *);
 static void sigchld_handler(int);
@@ -45,24 +59,40 @@ class NinnyServer
   int run();
 
  private:
-  int client_socket;                    // Web browser socket
-  int serv_socket;	                // Web host socket
+  int client_socket;                      // Web browser socket
+  int serv_socket;	                  // Web host socket
 
 	
-  int read_request(int);                // Read HTTP headers
-  int read_response(int);               // Read HTTP response
-  int stream_data();			// Stream data from server to client
+  int read_request(int);                  // Read HTTP headers
+  int read_response(int);                 // Read HTTP response
+  int stream_data();			  // Stream data from server to client
 
-  int sock_connect();		        // Connect a socket to server
-  int sock_send(int, const char *);	// Send a msg to socket
+  int sock_connect();		          // Connect a socket to server
+  int sock_send(int, const char *);	  // Send a msg to socket
 
-  int build_request();                  // build a request to the web server
+  int build_request();                    // Build a request to the web server
+
+  bool forbidden_content_request() const; // Search request for forbidden URL
+  bool is_filterable() const;             // Search response for forbidden words
+  bool filter_content(const char*&) const;
   
   //the host server
   string HOST;
   string NEW_REQUEST;
   
-  vector<string> BUFFER;
+  vector<char*> BUFFER;
+  vector<string> forbidden_url {
+        "www.aftonbladet.se",
+	"www.svd.se",
+	"www.liu.se",
+	"www.qz.com",
+	"www.bbc.com" };
+  
+  vector<string> forbidden_words {
+        "SpongeBob",
+	"BritneySpears",
+	"Paris Hilton",
+	"Norrköping"};
 
 };
 
@@ -126,14 +156,13 @@ int NinnyServer::read_response(int sockfd)
 
   ssize_t ret;
   char buffer[BLOCK_SIZE];
-  string TEMP;
 	
   while (true)
     {
 
       //read upto BLOCK_SIZE bytes from socket
       memset(buffer,0,BLOCK_SIZE);
-      ret = recv(sockfd, buffer, sizeof buffer, 0);
+      ret = recv(sockfd, buffer, sizeof buffer-1, 0);
 
       if (ret == -1)
 	{
@@ -146,9 +175,10 @@ int NinnyServer::read_response(int sockfd)
 	  serv_socket = -1;
 	  return 0;
 	}
-		
-      TEMP = string{buffer};
-      BUFFER.push_back(TEMP);
+      char* data = new char[ret];
+      memset(data,0,sizeof data);
+      strcpy(data,buffer);
+      BUFFER.push_back(data);
       // find end of http OBS! this is not optimal and doesnt always work
       if ( ret >= 4 )
 	{
@@ -170,7 +200,6 @@ int NinnyServer::read_request(int sockfd)
 {
   ssize_t ret;
   char buffer[BLOCK_SIZE];
-  string TEMP;
 
   while (true)
     {
@@ -178,22 +207,29 @@ int NinnyServer::read_request(int sockfd)
       memset(buffer,0,BLOCK_SIZE);
 
       alarm(15);
-      ret = recv(sockfd,buffer,sizeof buffer,0);
+      ret = recv(sockfd,buffer,sizeof buffer-1,0);
       alarm(0);
       
       if ( ret == -1 )
 	{
 	  //due to external interrupt
 	  if (errno == EINTR)
-	      cout << "No data in 15 seconds\n";
+	      cerr << "No data in 15 seconds\n";
 	  else    
 	    perror("recv:");
 	  return 1;
 	}
+      else if ( ret == 0 )
+	{
+	  cerr << "Client closed connection before request was recieved\n";
+	  return 2;
+	}
 
       //add the data to the buffer
-      TEMP = string(buffer);
-      BUFFER.push_back(TEMP);
+      char* data = new char[ret];
+      memset(data,0,sizeof data);
+      strcpy(data,buffer);
+      BUFFER.push_back(data);
       
       // find end of http OBS! this is not optimal and doesnt always work
       if ( ret >= 4 )
@@ -201,6 +237,36 @@ int NinnyServer::read_request(int sockfd)
 	  if (buffer[ret-4] == '\r' && buffer[ret-3] == '\n' &&
 	      buffer[ret-2] == '\r' && buffer[ret-1] == '\n')
 	    return 0;
+	}
+    }
+}
+
+bool NinnyServer::filter_content(const char* & buffer) const
+{
+  string temp = string(buffer);
+
+  for(auto words : forbidden_words)
+    { 
+      auto it = search(
+	        temp.begin(), temp.end(),
+		words.begin(),   words.end(),
+		[](char ch1, char ch2) { return std::toupper(ch1) == std::toupper(ch2); });
+	if(it != temp.end())
+	  return true;
+    }
+  return false;
+}
+
+bool NinnyServer::is_filterable() const
+{
+  for(auto str : BUFFER)
+    {
+      stringstream ss{str};
+      string line;
+      while(getline(ss, line))
+	{
+	  if(line.find("Content-type")
+	     // TODO Fix upper/lower case searches
 	}
     }
 }
@@ -238,6 +304,23 @@ int NinnyServer::build_request()
   return 0;
 }
 
+bool NinnyServer::forbidden_content_request() const
+{
+  string request = BUFFER[0];
+  stringstream request_stream{request};
+  string line;
+
+  cerr << request;
+
+  getline(request_stream, line);
+
+  for(auto str : forbidden_url)
+    {
+      if(line.find(str) != string::npos)
+	return true;
+    }
+  return false;    
+}
 
 int NinnyServer::stream_data()
 {
@@ -247,7 +330,7 @@ int NinnyServer::stream_data()
   //send the RESPONSE header
   for ( auto msg : BUFFER )
     {
-      sock_send(client_socket, msg.c_str() );
+      sock_send(client_socket, msg);
     }
   BUFFER.clear();
   
@@ -255,7 +338,7 @@ int NinnyServer::stream_data()
   while (true)
     {
       memset(buffer,0,BLOCK_SIZE);
-      ret = recv(serv_socket,buffer,sizeof buffer,0);
+      ret = recv(serv_socket,buffer,sizeof buffer-1,0);
 
       if ( ret == -1 )
 	{
@@ -277,11 +360,20 @@ int NinnyServer::stream_data()
 int NinnyServer::sock_send(int sockfd, const char * msg)
 {
   size_t len = strlen(msg);
+  size_t ret = 0;
+  const char* ptr = msg;
 
-  if ( len != send(sockfd,msg,len,0) )
-    { 
-      cerr << "Error: send\n";
-      return 1;
+  while(len > 0)
+    {
+      ret = send(sockfd, msg, len, 0);
+      ptr += ret;
+      len -= ret;
+      
+      if(ret == -1)
+	{
+	  perror("send:");
+	  return 1;
+	}
     }
   return 0;
 }
@@ -295,9 +387,23 @@ int NinnyServer::run()
       cerr << "Failed to read request header\n";
       return 1;
     }
-  
-  build_request();
-  
+
+  // Search header for forbidden URLS
+  if( forbidden_content_request() )
+    {
+      // Redirect if forbidden content is found
+      sock_send(client_socket,error1_redirect);
+      close(client_socket);
+      client_socket = -1;
+      cerr << "Inappropiate content detected: redirecting\n";
+      return 0;
+    }
+  else
+    {
+      // Otherwise, build a new request
+      build_request();
+    }
+
   if ( sock_connect() != 0 )
     {
       cerr << "Failed to connect to server\n";
