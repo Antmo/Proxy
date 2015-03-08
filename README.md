@@ -1,1 +1,2 @@
-<h1> Yo Yo yo ooo.. ... </h1>
+<h1> Web Proxy </h1>
+Read the manual
