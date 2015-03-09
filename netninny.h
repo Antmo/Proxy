@@ -17,7 +17,7 @@
 
 #include <iostream>
 #include <sstream>
-#include <queue>
+#include <vector>
 
 #define BLOCK_SIZE 512
 
@@ -49,18 +49,20 @@ class NinnyServer
   int serv_socket;	                // Web host socket
 
 	
-  int read_header(int);	                // Read HTTP headers
+  int read_request(int);                // Read HTTP headers
   int read_response(int);               // Read HTTP response
   int stream_data();			// Stream data from server to client
 
   int sock_connect();		        // Connect a socket to server
   int sock_send(int, const char *);	// Send a msg to socket
 
+  int build_request();                  // build a request to the web server
+  
   //the host server
   string HOST;
-
-  const string SVT = "GET / HTTP/1.1\r\nHost: svt.se\r\nConnection: close\r\n\r\n";
-  queue<string> BUFFER;
+  string NEW_REQUEST;
+  
+  vector<string> BUFFER;
 
 };
 
@@ -117,7 +119,7 @@ int NinnyServer::sock_connect()
 }
 
 /*
- * Reads header data and puts it into the buffer
+ * Reads RESPONSE header
  */
 int NinnyServer::read_response(int sockfd)
 {
@@ -138,33 +140,33 @@ int NinnyServer::read_response(int sockfd)
 	  perror("recv:");
 	  return 1;
 	}
+      else if (ret == 0)
+	{
+	  close(sockfd);
+	  serv_socket = -1;
+	  return 0;
+	}
 		
-
       TEMP = string{buffer};
-      cout << TEMP << '\n';
-      BUFFER.push(TEMP);
+      BUFFER.push_back(TEMP);
       // find end of http OBS! this is not optimal and doesnt always work
       if ( ret >= 4 )
 	{
 	  for (int i = 0; i < ret; ++i)
 	    {
-	      if (buffer[i] == '\r' && buffer[i+1] == '\n')
-		{
-		  i += 2;
-		  if ( i >= ret )
-		    return 0;
-		  if ( buffer[i] == '\r' && buffer[i+1] == '\n')
+	      if (buffer[i] == '\r' && buffer[i+1] == '\n' &&
+		  buffer[i+2] == '\r' && buffer[i+3] == '\n')
 		    return 0; //HTTP header end is in this block
-		}
 	    }
 	}
     }
   return 0;
 }
+
 /*
- * Read response header
+ * Read REQUEST header
  */
-int NinnyServer::read_header(int sockfd)
+int NinnyServer::read_request(int sockfd)
 {
   ssize_t ret;
   char buffer[BLOCK_SIZE];
@@ -172,81 +174,87 @@ int NinnyServer::read_header(int sockfd)
 
   while (true)
     {
+      
       memset(buffer,0,BLOCK_SIZE);
-      ret = recv(sockfd,buffer,sizeof buffer,0);
 
+      alarm(15);
+      ret = recv(sockfd,buffer,sizeof buffer,0);
+      alarm(0);
+      
       if ( ret == -1 )
 	{
-	  perror("recv:");
+	  //due to external interrupt
+	  if (errno == EINTR)
+	      cout << "No data in 15 seconds\n";
+	  else    
+	    perror("recv:");
 	  return 1;
 	}
 
-      
+      //add the data to the buffer
       TEMP = string(buffer);
-      //find HOST
-      string NEW_REQUEST;
-      stringstream ss {TEMP};
-      string line;
-
-      while ( getline(ss,line) )
-	{
-	  if ( line.find("Connection:") != string::npos )
-	    {
-	      line = "Connection: close";
-	      NEW_REQUEST += line + "\r\n";
-	      continue;
-	    }
-	  
-	  NEW_REQUEST += line + "\r\n";
-
-	  stringstream sss{line};
-	  string word;
-	  while( sss >> word)
-	    {
-	      if (word == "Host:")
-		{
-		  sss >> HOST;
-		  break;
-		}
-	    }
-	}
+      BUFFER.push_back(TEMP);
       
-      BUFFER.push(NEW_REQUEST);
-      cout << NEW_REQUEST << '\n';
-
       // find end of http OBS! this is not optimal and doesnt always work
       if ( ret >= 4 )
 	{
-	  for (int i = 0; i < ret; ++i)
-	    {
-	      if (buffer[i] == '\r' && buffer[i+1] == '\n')
-		{
-		  i += 2;
-		  if ( i >= ret )
-		    {
-		      NEW_REQUEST += "\r\n\r\n";
-		      return 0;
-		    }
-		  if ( buffer[i] == '\r' && buffer[i+1] == '\n')
-		    {
-		      NEW_REQUEST += "\r\n\r\n";
-		      return 0; //HTTP header end is in this block
-		    }
-		}
-	    }
+	  if (buffer[ret-4] == '\r' && buffer[ret-3] == '\n' &&
+	      buffer[ret-2] == '\r' && buffer[ret-1] == '\n')
+	    return 0;
 	}
     }
+}
 
+int NinnyServer::build_request()
+{
+  for ( auto str : BUFFER )
+    {
+      stringstream ss{str};
+      string line;
+      while ( getline(ss,line) )
+	{
+	  if (line == "\r\n" )
+	    break;
+
+	  if (line.find("Accept-Encoding") != string::npos)
+	      continue;
+
+	  if(line.find("Connection:") != string::npos)
+	      line = "Connection: Close\r";
+	    
+	  if (line.find("Host:") != string::npos )
+	    {
+	      stringstream sss {line};
+	      sss >> HOST >> HOST;
+	    }
+
+	  line += '\n';
+	  NEW_REQUEST += line;
+	}
+    }
+  NEW_REQUEST += "\r\n";
+  
+  BUFFER.clear();
   return 0;
 }
+
 
 int NinnyServer::stream_data()
 {
   ssize_t ret;
   char buffer[BLOCK_SIZE];
 
+  //send the RESPONSE header
+  for ( auto msg : BUFFER )
+    {
+      sock_send(client_socket, msg.c_str() );
+    }
+  BUFFER.clear();
+  
+  //continue to stream data
   while (true)
     {
+      memset(buffer,0,BLOCK_SIZE);
       ret = recv(serv_socket,buffer,sizeof buffer,0);
 
       if ( ret == -1 )
@@ -256,6 +264,7 @@ int NinnyServer::stream_data()
 	}
       else if (ret == 0)
 	{
+	  cout << "Closing socket.....\n";
 	  close(serv_socket);
 	  serv_socket = -1;
 	  return 0;
@@ -274,7 +283,6 @@ int NinnyServer::sock_send(int sockfd, const char * msg)
       cerr << "Error: send\n";
       return 1;
     }
-
   return 0;
 }
 
@@ -282,42 +290,29 @@ int NinnyServer::sock_send(int sockfd, const char * msg)
 int NinnyServer::run()
 {
 	
-  if ( read_header(client_socket) != 0 )
+  if ( read_request(client_socket) != 0 )
     {
       cerr << "Failed to read request header\n";
       return 1;
     }
-
-  HOST = "svt.se";
+  
+  build_request();
+  
   if ( sock_connect() != 0 )
     {
       cerr << "Failed to connect to server\n";
       return 1;
     }
-
-  while ( ! BUFFER.empty() )
-    {
-      //sock_send(serv_socket,BUFFER.front().c_str());
-      //BUFFER.pop();
-      BUFFER.pop();
-      sock_send(serv_socket,SVT.c_str());
-    }
-
-  //read the response
+  
+  //send the request
+  sock_send(serv_socket,NEW_REQUEST.c_str());
 	
   if ( read_response(serv_socket) != 0)
     {
       cerr << "Failed to read response header\n";
       return 1;
     }
-	
-  //send the response header back
-  while ( ! BUFFER.empty() )
-    {
-      sock_send(client_socket,BUFFER.front().c_str());
-      BUFFER.pop();
-    }
-  //continue to stream data
+
   stream_data();
 
   return 0;
