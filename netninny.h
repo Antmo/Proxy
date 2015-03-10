@@ -39,6 +39,7 @@ static const char* error2_redirect =
 
 static void * get_in_addr(struct sockaddr *);
 static void sigchld_handler(int);
+bool incase_find(const string&, const string&);
 
 class NinnyClient 
 {
@@ -73,35 +74,36 @@ class NinnyServer
   int build_request();                    // Build a request to the web server
 
   bool forbidden_content_request() const; // Search request for forbidden URL
-  bool is_filterable() const;             // Search response for forbidden words
-  bool filter_content(const char*&) const;
+  void is_filterable();                   // Search response for forbidden words
+  bool filter_content(const char*) const;
 
   char * get_data_space(size_t&);
   size_t get_block_size(size_t) const;
   
-  //the host server
   string HOST;
   string NEW_REQUEST;
+  bool FILTERABLE = false;
   
   vector<char*> BUFFER;
   int BUFFER_SIZE;
   
-  vector<string> forbidden_url {
+  /*  const vector<string> forbidden_url {
         "www.aftonbladet.se",
 	"www.svd.se",
 	"www.liu.se",
 	"www.qz.com",
 	"www.bbc.com" };
-  
-  vector<string> forbidden_words {
+  */
+  const vector<string> forbidden_words {
         "SpongeBob",
 	"BritneySpears",
 	"Paris Hilton",
 	"Norrköping"};
-
+  
+  const vector<string> content_type {"text", "html", "xml"};
 };
 
-bool incase_find(const string&, const string&);
+
 /* ========================================================= */
 /*                        NinnyServer                        */
 /* ========================================================= */
@@ -264,7 +266,7 @@ int NinnyServer::read_request(int sockfd)
     }
 }
 
-bool NinnyServer::filter_content(const char* & buffer) const
+bool NinnyServer::filter_content(const char* buffer) const
 {
   string temp = string(buffer);
 
@@ -278,7 +280,10 @@ bool NinnyServer::filter_content(const char* & buffer) const
   return false;
 }
 
-bool NinnyServer::is_filterable() const
+/*
+ * Check if 
+ */
+void NinnyServer::is_filterable()
 {
   for(auto str : BUFFER)
     {
@@ -287,9 +292,22 @@ bool NinnyServer::is_filterable() const
       while(getline(ss, line))
 	{
 	  if(incase_find(line,"content-type:"))
-	    ; // check if words following == text / html / xml
+	    {
+	      for(auto str : content_type)
+		{
+		  if(incase_find(line,str))
+		    {
+		      FILTERABLE = true;
+		      return;
+		    }
+		}
+	    }
+	  else
+	    continue;
 	}
     }
+  FILTERABLE = false;
+  return;
 }
 
 int NinnyServer::build_request()
@@ -340,17 +358,15 @@ bool NinnyServer::forbidden_content_request() const
       stringstream request_stream{request};
       string line;
 
-      // cerr << request;
-
       getline(request_stream, line);
 
-      for(auto str : forbidden_url)
+      for(auto str : forbidden_words)
 	{
 	  if(incase_find(line,str))
 	    return true;
 	}
-      return false;    
     }
+  return false;
 }
 
 int NinnyServer::stream_data()
@@ -362,6 +378,17 @@ int NinnyServer::stream_data()
   for ( size_t i = 0; i < BUFFER.size(); ++i )
     {
       size_t len = get_block_size(i);
+      if(FILTERABLE)
+	{
+	  if( filter_content(BUFFER.at(i)) )
+	    {
+	      sock_send(client_socket,error2_redirect,strlen(error2_redirect));
+	      close(client_socket);
+	      client_socket = -1;
+	      cerr << "Inappropiate content in request detected: redirecting\n";
+	      return 0;
+	    }
+	}
       sock_send(client_socket, BUFFER.at(i), len);
     }
   BUFFER.clear();
@@ -386,7 +413,20 @@ int NinnyServer::stream_data()
 	  return 0;
 	}
       else
-	sock_send(client_socket,buffer,ret);
+	{
+	  if(FILTERABLE)
+	    {
+	      if( filter_content(buffer) )
+		{
+		  sock_send(client_socket,error2_redirect,strlen(error2_redirect));
+		  close(client_socket);
+		  client_socket = -1;
+		  cerr << "Inappropiate content in request detected: redirecting\n";
+		  return 0;
+		}
+	    }
+	  sock_send(client_socket,buffer,ret);
+	}
     }
 }
 
@@ -420,19 +460,17 @@ int NinnyServer::run()
       return 1;
     }
 
-  // Search header for forbidden URLS
+  // Search header for forbidden words
   if( forbidden_content_request() )
     {
-      // Redirect if forbidden content is found
       sock_send(client_socket,error1_redirect,strlen(error1_redirect));
       close(client_socket);
       client_socket = -1;
-      cerr << "Inappropiate content detected: redirecting\n";
+      cerr << "Inappropiate content in request detected: redirecting\n";
       return 0;
     }
   else
     {
-      // Otherwise, build a new request
       build_request();
     }
 
@@ -442,7 +480,7 @@ int NinnyServer::run()
       return 1;
     }
   
-  //send the request
+  // Send the request
   sock_send(serv_socket,NEW_REQUEST.c_str(),NEW_REQUEST.size());
 	
   if ( read_response(serv_socket) != 0)
@@ -450,6 +488,9 @@ int NinnyServer::run()
       cerr << "Failed to read response header\n";
       return 1;
     }
+
+  // Check if response is filterable
+  is_filterable();
 
   stream_data();
 
