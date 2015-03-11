@@ -56,6 +56,8 @@ class NinnyServer
  public:
  NinnyServer(int sockfd) :
   client_socket(sockfd), serv_socket(-1), BUFFER_SIZE(0) {};
+  
+  ~NinnyServer();
 
   int run();
 
@@ -80,6 +82,7 @@ class NinnyServer
 
   char * get_data_space(size_t&);
   size_t get_block_size(size_t) const;
+  void purge_buffer();
   
   string HOST;
   string NEW_REQUEST;
@@ -102,6 +105,24 @@ class NinnyServer
 /* ========================================================= */
 
 
+void NinnyServer::purge_buffer()
+{
+  for(auto p : BUFFER)
+    delete[] p;
+
+  BUFFER.clear();
+  BUFFER_SIZE = 0;
+}
+
+NinnyServer::~NinnyServer()
+{
+  purge_buffer();
+
+  close(client_socket);
+  close(serv_socket);
+  client_socket = -1;
+  serv_socket = -1;
+}
 /*
  * connects to a web server using HOST
  */
@@ -370,8 +391,8 @@ int NinnyServer::build_request()
   if (pos != string::npos)
     NEW_REQUEST.erase(pos,HOST.size()+7);
   
-  BUFFER.clear();
-  BUFFER_SIZE = 0;
+  purge_buffer();
+
   return 0;
 }
 
@@ -406,8 +427,7 @@ int NinnyServer::stream_data()
       sock_send(client_socket, BUFFER.at(i), len);
     }
   
-  BUFFER.clear();
-  BUFFER_SIZE = 0;
+  purge_buffer();
   
   //continue to stream data
   while (true)
@@ -498,8 +518,8 @@ int NinnyServer::run()
 	      sock_send(client_socket,error2_redirect,strlen(error2_redirect));
 	      close(client_socket);
 	      client_socket = -1;
-	      close(server_socket);
-	      server_socket = -1;
+	      close(serv_socket);
+	      serv_socket = -1;
 	      return 0;
 	    }
 	}
@@ -510,8 +530,7 @@ int NinnyServer::run()
 	  sock_send(client_socket,BUFFER.at(i),size);
 	}
 
-      BUFFER.clear();
-      BUFFER_SIZE = 0;
+      purge_buffer();
     }
   else
     stream_data();
