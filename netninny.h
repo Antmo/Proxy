@@ -305,7 +305,7 @@ bool NinnyServer::filter_content(const char* buffer) const
 }
 
 /*
- * Check if 
+ * Check content type of request
  */
 bool NinnyServer::is_filterable() const
 {
@@ -493,7 +493,15 @@ int NinnyServer::run()
       for ( size_t i = 0; i < BUFFER.size(); ++i )
 	{
 	  if ( filter_content(BUFFER.at(i)) )
+	    {
+	      cout << "Inappropiate content in respone detected: redirecting\n";
 	      sock_send(client_socket,error2_redirect,strlen(error2_redirect));
+	      close(client_socket);
+	      client_socket = -1;
+	      close(server_socket);
+	      server_socket = -1;
+	      return 0;
+	    }
 	}
 
       for ( size_t i = 0; i < BUFFER.size(); ++i )
