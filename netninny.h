@@ -54,7 +54,7 @@ class NinnyServer
 {
  public:
  NinnyServer(int sockfd) :
-  client_socket(sockfd), serv_socket(-1) {};
+  client_socket(sockfd), serv_socket(-1), BUFFER_SIZE(0) {};
 
   int run();
 
@@ -68,19 +68,24 @@ class NinnyServer
   int stream_data();			  // Stream data from server to client
 
   int sock_connect();		          // Connect a socket to server
-  int sock_send(int, const char *);	  // Send a msg to socket
+  int sock_send(int, const char *,size_t);	  // Send a msg to socket
 
   int build_request();                    // Build a request to the web server
 
   bool forbidden_content_request() const; // Search request for forbidden URL
   bool is_filterable() const;             // Search response for forbidden words
   bool filter_content(const char*&) const;
+
+  char * get_data_space(size_t&);
+  size_t get_block_size(size_t) const;
   
   //the host server
   string HOST;
   string NEW_REQUEST;
   
   vector<char*> BUFFER;
+  int BUFFER_SIZE;
+  
   vector<string> forbidden_url {
         "www.aftonbladet.se",
 	"www.svd.se",
@@ -149,21 +154,45 @@ int NinnyServer::sock_connect()
   return 0;
 }
 
+size_t NinnyServer::get_block_size(size_t i ) const
+{
+  if ( i > BUFFER.size() )
+    return 1;
+
+  if (i == BUFFER.size() -1 )
+    return BUFFER_SIZE - BLOCK_SIZE *( BUFFER.size()-1);
+  else
+    return BLOCK_SIZE;
+}
+
+char * NinnyServer::get_data_space(size_t &size)
+{
+  if (BUFFER_SIZE < BUFFER.size() * BLOCK_SIZE)
+    {
+      size = BUFFER.size()*BLOCK_SIZE - BUFFER_SIZE;
+      return BUFFER.back() + (BLOCK_SIZE - size);
+    }
+  else
+    {
+      char *block = new char[BLOCK_SIZE];
+      memset(block,0,BLOCK_SIZE);
+      BUFFER.push_back(block);
+      size = BLOCK_SIZE;
+      return block;
+    }
+}
+
 /*
  * Reads RESPONSE header
  */
 int NinnyServer::read_response(int sockfd)
 {
-
-  ssize_t ret;
-  char buffer[BLOCK_SIZE];
-	
+  
   while (true)
     {
-
-      //read upto BLOCK_SIZE bytes from socket
-      memset(buffer,0,BLOCK_SIZE);
-      ret = recv(sockfd, buffer, sizeof buffer-1, 0);
+      size_t size;
+      char *buffer = get_data_space(size);
+      ssize_t ret = recv(sockfd, buffer, size, 0);
 
       if (ret == -1)
 	{
@@ -176,10 +205,9 @@ int NinnyServer::read_response(int sockfd)
 	  serv_socket = -1;
 	  return 0;
 	}
-      char* data = new char[ret];
-      memset(data,0,sizeof data);
-      strcpy(data,buffer);
-      BUFFER.push_back(data);
+
+      BUFFER_SIZE += ret;
+      
       // find end of http OBS! this is not optimal and doesnt always work
       if ( ret >= 4 )
 	{
@@ -199,18 +227,16 @@ int NinnyServer::read_response(int sockfd)
  */
 int NinnyServer::read_request(int sockfd)
 {
-  ssize_t ret;
-  char buffer[BLOCK_SIZE];
 
   while (true)
     {
       
-      memset(buffer,0,BLOCK_SIZE);
-
+      size_t size;
+      char * buffer = get_data_space(size);
       alarm(15);
-      ret = recv(sockfd,buffer,sizeof buffer-1,0);
+      ssize_t ret = recv(sockfd,buffer,size,0);
       alarm(0);
-      
+
       if ( ret == -1 )
 	{
 	  //due to external interrupt
@@ -226,14 +252,8 @@ int NinnyServer::read_request(int sockfd)
 	  return 2;
 	}
 
-      //add the data to the buffer
-      char* data = new char[ret];
-      memset(data,0,sizeof data);
-      strcpy(data,buffer);
-      BUFFER.push_back(data);
-      
+      BUFFER_SIZE += size;
       // find end of http OBS! this is not optimal and doesnt always work
-
       if ( ret >= 4 )
 	{
 	  if (buffer[ret-4] == '\r' && buffer[ret-3] == '\n' &&
@@ -267,7 +287,7 @@ bool NinnyServer::is_filterable() const
       while(getline(ss, line))
 	{
 	  if(incase_find(line,"content-type:"))
-	    ; // check if words following == text / html
+	    ; // check if words following == text / html / xml
 	}
     }
 }
@@ -278,11 +298,12 @@ int NinnyServer::build_request()
     {
       stringstream ss{str};
       string line;
+
       while ( getline(ss,line) )
 	{
 	  if (line == "\r\n" )
 	    break;
-
+	      
 	  if (incase_find(line,"Accept-Encoding"))
 	    continue;
 	  	    
@@ -299,9 +320,15 @@ int NinnyServer::build_request()
 	  NEW_REQUEST += line;
 	}
     }
+
   NEW_REQUEST += "\r\n";
+  int pos = NEW_REQUEST.find("http://");
+  
+  if (pos != string::npos)
+    NEW_REQUEST.erase(pos,HOST.size()+7);
   
   BUFFER.clear();
+  BUFFER_SIZE = 0;
   return 0;
 }
 
@@ -328,22 +355,24 @@ bool NinnyServer::forbidden_content_request() const
 
 int NinnyServer::stream_data()
 {
-  ssize_t ret;
+  size_t ret;
   char buffer[BLOCK_SIZE];
 
   //send the RESPONSE header
-  for ( auto msg : BUFFER )
+  for ( size_t i = 0; i < BUFFER.size(); ++i )
     {
-      sock_send(client_socket, msg);
+      size_t len = get_block_size(i);
+      sock_send(client_socket, BUFFER.at(i), len);
     }
   BUFFER.clear();
+  BUFFER_SIZE = 0;
   
   //continue to stream data
   while (true)
     {
-      memset(buffer,0,BLOCK_SIZE);
-      ret = recv(serv_socket,buffer,sizeof buffer-1,0);
-
+ 
+      ret = recv(serv_socket,buffer,BLOCK_SIZE,0);
+      
       if ( ret == -1 )
 	{
 	  perror("recv");
@@ -357,20 +386,19 @@ int NinnyServer::stream_data()
 	  return 0;
 	}
       else
-	sock_send(client_socket,buffer);
+	sock_send(client_socket,buffer,ret);
     }
 }
 
-int NinnyServer::sock_send(int sockfd, const char * msg)
+int NinnyServer::sock_send(int sockfd, const char *msg, size_t size)
 {
-  size_t len = strlen(msg)+1;
   size_t ret = 0;
-  const char* ptr = msg;
-
+  size_t len = size;
   while(len > 0)
     {
+      
       ret = send(sockfd, msg, len, 0);
-      ptr += ret;
+      msg += ret;
       len -= ret;
       
       if(ret == -1)
@@ -396,7 +424,7 @@ int NinnyServer::run()
   if( forbidden_content_request() )
     {
       // Redirect if forbidden content is found
-      sock_send(client_socket,error1_redirect);
+      sock_send(client_socket,error1_redirect,strlen(error1_redirect));
       close(client_socket);
       client_socket = -1;
       cerr << "Inappropiate content detected: redirecting\n";
@@ -415,7 +443,7 @@ int NinnyServer::run()
     }
   
   //send the request
-  sock_send(serv_socket,NEW_REQUEST.c_str());
+  sock_send(serv_socket,NEW_REQUEST.c_str(),NEW_REQUEST.size());
 	
   if ( read_response(serv_socket) != 0)
     {
