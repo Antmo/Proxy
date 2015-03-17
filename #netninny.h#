@@ -161,7 +161,7 @@ size_t NinnyServer::get_block_size(size_t i ) const
 }
 
 char * NinnyServer::get_data_space(size_t &size)
-{
+{ 
   if (BUFFER_SIZE < BUFFER.size() * BLOCK_SIZE)
     {
       size = BUFFER.size()*BLOCK_SIZE - BUFFER_SIZE;
